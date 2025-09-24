@@ -6,6 +6,9 @@ sim-mujoco from: https://github.com/Vector-Wangel/XLeRobot/tree/main/simulation/
 3. No head pan/tilt mesh/geometry - invisible in simulation 
 
 
+- Kinematics
+1. no IK
+
 
 
 
