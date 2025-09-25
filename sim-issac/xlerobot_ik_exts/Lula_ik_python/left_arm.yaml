@@ -1,0 +1,21 @@
+# xlerobot_right_arm.yaml
+api_version: 1.0
+
+# Joints controlled by IK (order matters)
+cspace:
+  - Rotation
+  - Pitch
+  - Elbow
+  - Wrist_Pitch
+  - Wrist_Roll
+
+# Root frame from your URDF for this arm
+root_link: Base
+
+# Neutral pose (radians), aligned to cspace above
+# (chosen as midpoints of URDF joint limits when provided)
+default_q: [0.0, 1.675, 1.470795, 0.0, 0.0]
+
+# Optional (can stay empty)
+cspace_to_urdf_rules: []
+composite_task_spaces: []
