@@ -1,21 +1,49 @@
-# xlerobot_left_arm.yaml
+# The robot description defines the generalized coordinates and how to map those
+# to the underlying URDF dofs.
+
 api_version: 1.0
 
-# Joints controlled by IK (order matters)
+# Defines the generalized coordinates. Each generalized coordinate is assumed
+# to have an entry in the URDF.
+# Lula will only use these joints to control the robot position.
 cspace:
-  - Rotation_2
-  - Pitch_2
-  - Elbow_2
-  - Wrist_Pitch_2
-  - Wrist_Roll_2
+    - Rotation_2
+    - Pitch_2
+    - Elbow_2
+    - Wrist_Pitch_2
+    - Wrist_Roll_2
+default_q: [
+    0.0,-0.0002,0.0002,1e-04,0.0
+]
 
-# Root frame from your URDF for this arm
-root_link: Base_2
+acceleration_limits: [
+   10,10,10,10,10
+]
 
-# Neutral pose (radians), aligned to cspace above
-# (chosen as midpoints of URDF joint limits when provided)
-default_q: [0.0, 1.675, 1.470795, 0.0, 0.0]
+jerk_limits: [
+   10000,10000,10000,10000,10000
+]
 
-# Optional (can stay empty)
-cspace_to_urdf_rules: []
-composite_task_spaces: []
+# Most dimensions of the cspace have a direct corresponding element
+# in the URDF. This list of rules defines how unspecified coordinates
+# should be extracted or how values in the URDF should be overwritten.
+
+cspace_to_urdf_rules:
+    - {name: root_x_axis_joint, rule: fixed, value: -0.0}
+    - {name: root_y_axis_joint, rule: fixed, value: 0.0}
+    - {name: root_z_rotation_joint, rule: fixed, value: -0.0}
+    - {name: Rotation_2, rule: fixed, value: 0.0}
+    - {name: head_pan_joint, rule: fixed, value: 0.0}
+    - {name: Pitch_2, rule: fixed, value: -0.0002}
+    - {name: head_tilt_joint, rule: fixed, value: -0.0}
+    - {name: Elbow_2, rule: fixed, value: 0.0002}
+    - {name: Wrist_Pitch_2, rule: fixed, value: 1e-04}
+    - {name: Wrist_Roll_2, rule: fixed, value: -0.0}
+    - {name: Jaw, rule: fixed, value: 0.0}
+    - {name: Jaw_2, rule: fixed, value: 0.0}
+
+# Lula uses collision spheres to define the robot geometry in order to avoid
+# collisions with external obstacles.  If no spheres are specified, Lula will
+# not be able to avoid obstacles.
+
+collision_spheres:
