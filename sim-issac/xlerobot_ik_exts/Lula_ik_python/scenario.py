@@ -34,7 +34,7 @@ class XleRobotKinematicsScenario:
         # Paths relative to this file
         self._pkg_dir = Path(__file__).resolve().parent
         sim_issac_dir = self._pkg_dir.parent.parent
-        self._usd_path = str((sim_issac_dir / "xlerobot_maniskill" / "xlerobot" / "xlerobot.usd").resolve())
+        self._usd_path = str((sim_issac_dir / "xlerobot_maniskill" / "xlerobot issac" / "xlerobot issac.usd").resolve())
         self._urdf_path = str((sim_issac_dir / "xlerobot_maniskill" / "xlerobot issac.urdf").resolve())
         self._right_yaml = str((self._pkg_dir / "right_arm.yaml").resolve())
         self._left_yaml = str((self._pkg_dir / "left_arm.yaml").resolve())

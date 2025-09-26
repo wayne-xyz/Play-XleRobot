@@ -7,11 +7,11 @@ api_version: 1.0
 # to have an entry in the URDF.
 # Lula will only use these joints to control the robot position.
 cspace:
-    - Rotation
-    - Pitch
-    - Elbow
-    - Wrist_Pitch
-    - Wrist_Roll
+    - Rotation_2
+    - Pitch_2
+    - Elbow_2
+    - Wrist_Pitch_2
+    - Wrist_Roll_2
 default_q: [
     0.0,-0.0002,0.0002,1e-04,0.0
 ]

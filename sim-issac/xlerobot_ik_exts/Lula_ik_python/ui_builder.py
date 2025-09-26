@@ -158,9 +158,21 @@ class UIBuilder:
                     world.scene.add(target_left_obj)
                 except Exception as e:
                     print(f"[XleRobot] Skipping add target_left: {e}")
+            # Ensure physics world and articulation are initialized before enabling RUN
+            try:
+                world.reset()
+            except Exception as e:
+                print(f"[XleRobot] World.reset() failed: {e}")
             self._setup_scenario()
         finally:
             self._is_loading = False
 
     def _on_click_reset(self):
+        # Re-initialize physics so articulation is ready after reset
+        try:
+            world = World.instance()
+            if world is not None:
+                world.reset()
+        except Exception as e:
+            print(f"[XleRobot] World.reset() on RESET failed: {e}")
         self._on_post_reset_btn()
