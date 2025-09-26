@@ -16,8 +16,8 @@ from isaacsim.robot_motion.motion_generation import (
 
 
 # End-effector prim names on your robot. Adjust if different on your USD/URDF.
-RIGHT_EE_NAME = "Fixed_Jaw_tip"
-LEFT_EE_NAME = "Fixed_Jaw_tip_2"
+RIGHT_EE_NAME = "Fixed_Jaw"
+LEFT_EE_NAME = "Fixed_Jaw_2"
 
 
 def _quat_to_rotmat(q):
@@ -153,16 +153,16 @@ class XleRobotKinematicsScenario:
 
         # Create or get targets
         if stage.GetPrimAtPath("/World/target_right"):
-            self._target_right = XFormPrim("/World/target_right")
+            self._target_right = XFormPrim("/World/target_right", name="target_right")
         else:
-            self._target_right = XFormPrim("/World/target_right", scale=[0.04, 0.04, 0.04])
+            self._target_right = XFormPrim("/World/target_right", name="target_right", scale=[0.04, 0.04, 0.04])
         # Always set a sane default so world.reset() positions it correctly
         self._target_right.set_default_state(np.array([0.45, -0.15, 0.95]), np.array([0, 0, 0, 1]))
 
         if stage.GetPrimAtPath("/World/target_left"):
-            self._target_left = XFormPrim("/World/target_left")
+            self._target_left = XFormPrim("/World/target_left", name="target_left")
         else:
-            self._target_left = XFormPrim("/World/target_left", scale=[0.04, 0.04, 0.04])
+            self._target_left = XFormPrim("/World/target_left", name="target_left", scale=[0.04, 0.04, 0.04])
         # Always set a sane default so world.reset() positions it correctly
         self._target_left.set_default_state(np.array([0.45, 0.15, 0.95]), np.array([0, 0, 0, 1]))
 
