@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 
 import omni.usd
-from pxr import UsdPhysics
+from pxr import UsdPhysics, UsdGeom, Gf
 
 from isaacsim.core.prims import SingleArticulation as Articulation
 from isaacsim.core.prims import SingleXFormPrim as XFormPrim
@@ -16,30 +16,55 @@ from isaacsim.robot_motion.motion_generation import (
 
 
 # End-effector prim names on your robot. Adjust if different on your USD/URDF.
-RIGHT_EE_NAME = "Fixed_Jaw"
-LEFT_EE_NAME = "Fixed_Jaw_2"
+RIGHT_EE_NAME = "Fixed_Jaw_tip"
+LEFT_EE_NAME = "Fixed_Jaw_tip_2"
+
+TARGET_DEFAULT_POS = np.array([0.45, 0, 0.95])
+TARGET_DEFAULT_QUAT = np.array([0.7011,0,0,0.7011])
 
 
 def _quat_to_rotmat(q):
+    """
+    Convert a quaternion to a 3x3 rotation matrix.
+
+    Args:
+        q: Quaternion as (x, y, z, w) or similar sequence.
+
+    Returns:
+        3x3 numpy array representing the rotation matrix.
+    """
     try:
+        # Try to unpack the quaternion directly
         x, y, z, w = q
     except Exception:
-        # Fall back if given as tuple-like
+        # Fall back if given as tuple-like (e.g., numpy array)
         x, y, z, w = q[0], q[1], q[2], q[3]
-    # Normalize to be safe
+    # Normalize the quaternion to avoid scaling issues
     n = x * x + y * y + z * z + w * w
     if n > 0.0:
         s = 2.0 / n
     else:
         s = 0.0
+    # Precompute products for efficiency
     xx, yy, zz = x * x * s, y * y * s, z * z * s
     xy, xz, yz = x * y * s, x * z * s, y * z * s
     wx, wy, wz = w * x * s, w * y * s, w * z * s
+    # Construct the rotation matrix using the standard formula
     return np.array([
         [1.0 - (yy + zz),        xy - wz,        xz + wy],
         [       xy + wz, 1.0 - (xx + zz),        yz - wx],
         [       xz - wy,        yz + wx, 1.0 - (xx + yy)],
     ])
+
+
+def _angle_between_rotmats(Ra, Rb):
+    try:
+        M = Ra.T @ Rb
+        c = (np.trace(M) - 1.0) * 0.5
+        c = float(np.clip(c, -1.0, 1.0))
+        return float(np.arccos(c))
+    except Exception:
+        return float("nan")
 
 
 class XleRobotKinematicsScenario:
@@ -49,6 +74,10 @@ class XleRobotKinematicsScenario:
         self._target_left = None
         self._base_right = None
         self._base_left = None
+        self._base_right_path = None
+        self._base_left_path = None
+        # Control whether to apply IK actions even if solver reports failure
+        self._apply_action_on_fail = True
 
         self._right_solver = None
         self._left_solver = None
@@ -116,6 +145,23 @@ class XleRobotKinematicsScenario:
 
     # Removed composition waiting to avoid potential crashes; rely on post-reference scans
 
+    def _find_prim_by_name_under(self, anchor_path: str, name: str):
+        """Find the first prim with exact name under the given anchor path."""
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return None
+        anchor = stage.GetPrimAtPath(anchor_path)
+        if not anchor or not anchor.IsValid():
+            return None
+        prefix = anchor_path.rstrip("/") + "/"
+        for prim in stage.Traverse():
+            p = prim.GetPath().pathString
+            if not p.startswith(prefix):
+                continue
+            if prim.GetName() == name:
+                return p
+        return None
+
     def load_example_assets(self):
         """Ensure robot USD exists on stage and create target frames.
 
@@ -157,22 +203,34 @@ class XleRobotKinematicsScenario:
         else:
             self._target_right = XFormPrim("/World/target_right", name="target_right", scale=[0.04, 0.04, 0.04])
         # Always set a sane default so world.reset() positions it correctly
-        self._target_right.set_default_state(np.array([0.45, -0.15, 0.95]), np.array([0, 0, 0, 1]))
+        self._target_right.set_default_state(TARGET_DEFAULT_POS, TARGET_DEFAULT_QUAT)
 
         if stage.GetPrimAtPath("/World/target_left"):
             self._target_left = XFormPrim("/World/target_left", name="target_left")
         else:
             self._target_left = XFormPrim("/World/target_left", name="target_left", scale=[0.04, 0.04, 0.04])
         # Always set a sane default so world.reset() positions it correctly
-        self._target_left.set_default_state(np.array([0.45, 0.15, 0.95]), np.array([0, 0, 0, 1]))
+        self._target_left.set_default_state(TARGET_DEFAULT_POS, TARGET_DEFAULT_QUAT)
 
-        # Cache base link prims for correct base pose mapping per arm
-        base_r_prim = stage.GetPrimAtPath("/World/xlerobot/Base")
-        if base_r_prim and base_r_prim.IsValid():
-            self._base_right = XFormPrim("/World/xlerobot/Base")
-        base_l_prim = stage.GetPrimAtPath("/World/xlerobot/Base_2")
-        if base_l_prim and base_l_prim.IsValid():
-            self._base_left = XFormPrim("/World/xlerobot/Base_2")
+        # Cache base link prims for correct base pose mapping per arm (search by name)
+        self._base_right_path = self._find_prim_by_name_under("/World/xlerobot", "Base")
+        self._base_left_path = self._find_prim_by_name_under("/World/xlerobot", "Base_2")
+        if self._base_right_path:
+            try:
+                self._base_right = XFormPrim(self._base_right_path)
+                print(f"[XleRobot] Found right base link at: {self._base_right_path}")
+            except Exception:
+                self._base_right = None
+        else:
+            print("[XleRobot] Right base link named 'Base' not found under /World/xlerobot")
+        if self._base_left_path:
+            try:
+                self._base_left = XFormPrim(self._base_left_path)
+                print(f"[XleRobot] Found left base link at: {self._base_left_path}")
+            except Exception:
+                self._base_left = None
+        else:
+            print("[XleRobot] Left base link named 'Base_2' not found under /World/xlerobot")
 
         return self._articulation, self._target_right, self._target_left
 
@@ -253,6 +311,18 @@ class XleRobotKinematicsScenario:
             trg_pos, trg_quat = self._target_right.get_world_pose()
             if (self._step_count % self._debug_every_n) == 0:
                 try:
+                    bp = np.asarray(base_r_pos).tolist()
+                    bq = np.asarray(base_r_quat).tolist()
+                    print(f"[XleRobot][Right] Base prim={self._base_right_path or '[articulation root]'} frame=world pos={bp} quat={bq}")
+                    # Also print stage-computed world transform for the base prim for comparison
+                    stage = omni.usd.get_context().get_stage()
+                    prim = stage.GetPrimAtPath(self._base_right_path) if self._base_right_path else None
+                    if prim and prim.IsValid():
+                        xf = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(0.0)
+                        t = xf.ExtractTranslation()
+                        rq = xf.ExtractRotation().GetQuat()
+                        rq_list = [rq.GetReal(), rq.GetImaginary()[0], rq.GetImaginary()[1], rq.GetImaginary()[2]]
+                        print(f"[XleRobot][Right] Stage world Base pos={[t[0], t[1], t[2]]} quat={rq_list}")
                     ee_pos_r, ee_rot_r = self._right_articulation_ik.compute_end_effector_pose()
                     pos_err_r = float(np.linalg.norm(np.array(trg_pos) - np.array(ee_pos_r)))
                     # Compute rough orientation error as angle between forward axes
@@ -266,17 +336,35 @@ class XleRobotKinematicsScenario:
                     print(f"[XleRobot][Right] pre-IK target_pos={trg_pos} ee_pos={ee_pos_r} pos_err={pos_err_r:.4f} ori_err(rad)={ang:.3f}")
                 except Exception as e:
                     print(f"[XleRobot][Right] pre-IK could not compute EE pose: {e}")
+            # Extra debug: also compute base-frame target for comparison
+            R_base_r = _quat_to_rotmat(base_r_quat)
+            tgt_pos_r_b = R_base_r.T @ (np.array(trg_pos) - np.array(base_r_pos))
+            # Note: articulation wrapper expects world-frame target while base pose is set
             action_r, ok_r = self._right_articulation_ik.compute_inverse_kinematics(trg_pos, trg_quat)
             if ok_r:
-                self._articulation.apply_action(action_r)
+                try:
+                    self._articulation.apply_action(action_r)
+                except Exception:
+                    pass
+                if (self._step_count % self._debug_every_n) == 0:
+                    print(f"[XleRobot][Right] IK ok. target={trg_pos}")
+            else:
+                # Apply near-solution anyway so the seed can converge across steps
+                if self._apply_action_on_fail and action_r is not None:
+                    try:
+                        self._articulation.apply_action(action_r)
+                        if (self._step_count % self._debug_every_n) == 0:
+                            print(f"[XleRobot][Right] applying action despite IK failure")
+                    except Exception:
+                        if (self._step_count % self._debug_every_n) == 0:
+                            print("[XleRobot][Right] IK failed and action could not be applied")
                 if (self._step_count % self._debug_every_n) == 0:
                     try:
-                        print(f"[XleRobot][Right] IK ok. target={trg_pos} dof={num_dof} action_len={len(action_r)}")
+                        ee_pos_r_b, ee_rot_r_b = self._right_articulation_ik.compute_end_effector_pose()
+                        pos_err_b = float(np.linalg.norm(tgt_pos_r_b - np.array(ee_pos_r_b)))
+                        print(f"[XleRobot][Right] IK failed. world_pos_err={pos_err_r:.4f} base_pos_err={pos_err_b:.4f} tgt_b={tgt_pos_r_b.tolist()}")
                     except Exception:
-                        print("[XleRobot][Right] IK ok.")
-            else:
-                if (self._step_count % self._debug_every_n) == 0:
-                    print("[XleRobot][Right] IK failed target=", trg_pos)
+                        print("[XleRobot][Right] IK failed target=", trg_pos)
 
         # Left arm
         if self._left_articulation_ik is not None and self._target_left is not None:
@@ -292,6 +380,18 @@ class XleRobotKinematicsScenario:
             trg_pos, trg_quat = self._target_left.get_world_pose()
             if (self._step_count % self._debug_every_n) == 0:
                 try:
+                    bp = np.asarray(base_l_pos).tolist()
+                    bq = np.asarray(base_l_quat).tolist()
+                    print(f"[XleRobot][Left]  Base prim={self._base_left_path or '[articulation root]'} frame=world pos={bp} quat={bq}")
+                    # Also print stage-computed world transform for the left base prim for comparison
+                    stage = omni.usd.get_context().get_stage()
+                    prim = stage.GetPrimAtPath(self._base_left_path) if self._base_left_path else None
+                    if prim and prim.IsValid():
+                        xf = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(0.0)
+                        t = xf.ExtractTranslation()
+                        rq = xf.ExtractRotation().GetQuat()
+                        rq_list = [rq.GetReal(), rq.GetImaginary()[0], rq.GetImaginary()[1], rq.GetImaginary()[2]]
+                        print(f"[XleRobot][Left]  Stage world Base_2 pos={[t[0], t[1], t[2]]} quat={rq_list}")
                     ee_pos_l, ee_rot_l = self._left_articulation_ik.compute_end_effector_pose()
                     pos_err_l = float(np.linalg.norm(np.array(trg_pos) - np.array(ee_pos_l)))
                     R_tl = _quat_to_rotmat(trg_quat)
@@ -302,17 +402,32 @@ class XleRobotKinematicsScenario:
                     print(f"[XleRobot][Left] pre-IK target_pos={trg_pos} ee_pos={ee_pos_l} pos_err={pos_err_l:.4f} ori_err(rad)={angl:.3f}")
                 except Exception as e:
                     print(f"[XleRobot][Left] pre-IK could not compute EE pose: {e}")
+            R_base_l = _quat_to_rotmat(base_l_quat)
+            tgt_pos_l_b = R_base_l.T @ (np.array(trg_pos) - np.array(base_l_pos))
             action_l, ok_l = self._left_articulation_ik.compute_inverse_kinematics(trg_pos, trg_quat)
             if ok_l:
-                self._articulation.apply_action(action_l)
+                try:
+                    self._articulation.apply_action(action_l)
+                except Exception:
+                    pass
+                if (self._step_count % self._debug_every_n) == 0:
+                    print(f"[XleRobot][Left] IK ok. target={trg_pos}")
+            else:
+                if self._apply_action_on_fail and action_l is not None:
+                    try:
+                        self._articulation.apply_action(action_l)
+                        if (self._step_count % self._debug_every_n) == 0:
+                            print(f"[XleRobot][Left]  applying action despite IK failure")
+                    except Exception:
+                        if (self._step_count % self._debug_every_n) == 0:
+                            print("[XleRobot][Left]  IK failed and action could not be applied")
                 if (self._step_count % self._debug_every_n) == 0:
                     try:
-                        print(f"[XleRobot][Left] IK ok. target={trg_pos} dof={num_dof} action_len={len(action_l)}")
+                        ee_pos_l_b, ee_rot_l_b = self._left_articulation_ik.compute_end_effector_pose()
+                        pos_err_b = float(np.linalg.norm(tgt_pos_l_b - np.array(ee_pos_l_b)))
+                        print(f"[XleRobot][Left]  IK failed. world_pos_err={pos_err_l:.4f} base_pos_err={pos_err_b:.4f} tgt_b={tgt_pos_l_b.tolist()}")
                     except Exception:
-                        print("[XleRobot][Left] IK ok.")
-            else:
-                if (self._step_count % self._debug_every_n) == 0:
-                    print("[XleRobot][Left] IK failed target=", trg_pos)
+                        print("[XleRobot][Left]  IK failed target=", trg_pos)
 
         self._step_count += 1
 
